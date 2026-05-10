@@ -1,149 +1,119 @@
 """
-ECG MODEL RETRAINING SCRIPT - NO NATSORT DEPENDENCY
-===================================================
-This script retrains the model using available training data.
-Works with any Python installation (Anaconda, venv, system Python)
+ECG MODEL RETRAINING WITH CORRECT LABELED DATA
+===============================================
 
-USAGE:
-    1. Place this script in: Deployment/retrain_model_simple.py
-    2. Run: python retrain_model_simple.py
-    3. New model will be saved as: Heart_Disease_Prediction_using_ECG_NEW.pkl
+Uses Final_Dataset/With_dimensionality_reduction/pca_final.csv
+This file has:
+  - 929 samples (all your ECG images)
+  - 400 PCA features (already reduced)
+  - target column with correct class labels (0, 1, 2, 3)
+
+Class mapping:
+  0 = Abnormal Heartbeat (AHB)
+  1 = Myocardial Infarction (MI)
+  2 = Normal
+  3 = History of Myocardial Infarction (PMI)
 """
 
 import pandas as pd
 import numpy as np
 import os
-import sys
 import joblib
-from sklearn.decomposition import PCA
 from sklearn.model_selection import train_test_split
 from sklearn.ensemble import VotingClassifier, RandomForestClassifier
 from sklearn.svm import SVC
 from sklearn.neighbors import KNeighborsClassifier
 from sklearn.linear_model import LogisticRegression
 from sklearn.naive_bayes import GaussianNB
-from sklearn.metrics import accuracy_score, classification_report
+from sklearn.metrics import accuracy_score, classification_report, confusion_matrix
 import warnings
 warnings.filterwarnings('ignore')
 
 print("\n" + "="*70)
-print("ECG MODEL RETRAINING - NO DEPENDENCIES")
+print("ECG MODEL RETRAINING WITH CORRECT LABELED DATA")
 print("="*70 + "\n")
 
 # ============================================================================
-# STEP 1: LOAD TRAINING DATA
+# STEP 1: LOAD DATA FROM pca_final.csv
 # ============================================================================
-print("[1/5] Loading training data...")
-
-data_loaded = False
-X_data = None
-y_data = None
-
-# Try multiple data sources
-possible_paths = [
-    '../Final_Dataset/With_dimensionality_reduction/combined_data.csv',
-    '../Final_Dataset/final_1D.csv',
-    '../Combined1d_csv/Combined_IDLead_1.csv',
-    'final_1D.csv',
-]
-
-for path in possible_paths:
-    if os.path.exists(path):
-        try:
-            print(f"  Trying: {path}")
-            data = pd.read_csv(path)
-            if data.shape[1] > 1:  # Has more than just labels
-                X_data = data.iloc[:, :-1].values
-                y_data = data.iloc[:, -1].values
-                data_loaded = True
-                print(f"  ✓ Loaded successfully!")
-                break
-        except Exception as e:
-            print(f"  ✗ Failed: {e}")
-
-if not data_loaded:
-    print("\n⚠️ Training data not found in standard locations.")
-    print("Generating synthetic data for demonstration...")
-    print("(For production, place your training CSV in Final_Dataset folder)\n")
-    
-    # Generate synthetic data based on your project specs
-    n_samples = 500
-    n_features = 3060  # 12 leads × 255 points
-    
-    X_data = np.random.randn(n_samples, n_features)
-    y_data = np.random.randint(0, 4, n_samples)
-    
-    print(f"Generated: {n_samples} samples × {n_features} features")
-    print(f"Classes: {np.unique(y_data)}")
-
-X_df = pd.DataFrame(X_data)
-print(f"\n✓ Data ready: {X_df.shape[0]} samples, {X_df.shape[1]} features")
-print(f"  Class distribution: {dict(zip(*np.unique(y_data, return_counts=True)))}")
-
-# ============================================================================
-# STEP 2: APPLY PCA DIMENSIONALITY REDUCTION
-# ============================================================================
-print("\n[2/5] Applying PCA dimensionality reduction...")
+print("[1/4] Loading data from pca_final.csv...")
 
 try:
-    n_components = min(400, X_df.shape[1])
-    pca = PCA(n_components=n_components)
+    data_path = '../Final_Dataset/With_dimensionality_reduction/pca_final.csv'
     
-    X_pca = pca.fit_transform(X_df)
-    print(f"✓ PCA successful: {X_df.shape[1]} → {X_pca.shape[1]} features")
+    if not os.path.exists(data_path):
+        print(f"❌ File not found: {data_path}")
+        print("Make sure you're in the Deployment folder!")
+        exit(1)
     
-    explained_var = sum(pca.explained_variance_ratio_)
-    print(f"✓ Explained variance: {explained_var:.4f} ({explained_var*100:.2f}%)")
+    # Load the CSV file
+    df = pd.read_csv(data_path, index_col=0)  # Skip index column
     
-    # Save PCA model
-    joblib.dump(pca, 'PCA_ECG (1).pkl')
-    print(f"✓ PCA model saved: PCA_ECG (1).pkl")
+    print(f"✓ Loaded: {data_path}")
+    print(f"  Shape: {df.shape[0]} samples × {df.shape[1]} columns")
+    
+    # Separate features and target
+    X_data = df.iloc[:, :-1].values  # All columns except last
+    y_data = df.iloc[:, -1].values   # Last column is target
+    
+    print(f"✓ Features: {X_data.shape}")
+    print(f"✓ Labels: {y_data.shape}")
+    
+    # Check classes
+    unique_classes = np.unique(y_data)
+    print(f"✓ Classes found: {unique_classes}")
+    print(f"✓ Class distribution:")
+    for cls in sorted(unique_classes):
+        count = np.sum(y_data == cls)
+        class_names = {
+            0: "Abnormal Heartbeat (AHB)",
+            1: "Myocardial Infarction (MI)",
+            2: "Normal",
+            3: "History of MI (PMI)"
+        }
+        print(f"    Class {cls} ({class_names.get(cls, 'Unknown')}): {count} samples")
+    
 except Exception as e:
-    print(f"✗ PCA failed: {e}")
-    print("  Using original features (no dimensionality reduction)")
-    X_pca = X_df.values
-    pca = None
+    print(f"❌ Error loading data: {e}")
+    import traceback
+    traceback.print_exc()
+    exit(1)
 
 # ============================================================================
-# STEP 3: SPLIT DATA INTO TRAIN/TEST
+# STEP 2: SPLIT DATA INTO TRAIN/TEST
 # ============================================================================
-print("\n[3/5] Splitting data into train/test sets...")
+print("\n[2/4] Splitting data...")
 
 try:
     X_train, X_test, y_train, y_test = train_test_split(
-        X_pca, y_data, 
-        test_size=0.2, 
+        X_data, y_data,
+        test_size=0.2,
         random_state=42,
         stratify=y_data
     )
-    print(f"✓ Training set: {X_train.shape[0]} samples")
+    print(f"✓ Train set: {X_train.shape[0]} samples")
     print(f"✓ Test set: {X_test.shape[0]} samples")
-    print(f"✓ Features per sample: {X_train.shape[1]}")
+    print(f"✓ Train distribution: {np.bincount(y_train)}")
+    print(f"✓ Test distribution: {np.bincount(y_test)}")
 except Exception as e:
-    print(f"⚠️ Stratified split failed (class imbalance): {e}")
-    print("  Using regular split instead...")
-    X_train, X_test, y_train, y_test = train_test_split(
-        X_pca, y_data, test_size=0.2, random_state=42
-    )
-    print(f"✓ Training set: {X_train.shape[0]} samples")
-    print(f"✓ Test set: {X_test.shape[0]} samples")
+    print(f"❌ Split error: {e}")
+    exit(1)
 
 # ============================================================================
-# STEP 4: TRAIN VOTING CLASSIFIER ENSEMBLE
+# STEP 3: TRAIN VOTING CLASSIFIER ENSEMBLE
 # ============================================================================
-print("\n[4/5] Training Voting Classifier Ensemble...")
+print("\n[3/4] Training Voting Classifier Ensemble...")
 print("  Models:")
-print("    • SVM (Support Vector Machine)")
-print("    • KNN (K-Nearest Neighbors)")
-print("    • Random Forest")
+print("    • SVM (C=10, gamma=0.01)")
+print("    • KNN (n_neighbors=3)")
+print("    • Random Forest (n_estimators=300)")
 print("    • Gaussian Naive Bayes")
 print("    • Logistic Regression")
-print("\n  (This may take a few minutes)...\n")
 
 try:
     voting_clf = VotingClassifier(
         estimators=[
-            ('svm', SVC(C=10, gamma=0.01, probability=True, random_state=42, max_iter=1000)),
+            ('svm', SVC(C=10, gamma=0.01, probability=True, random_state=42)),
             ('knn', KNeighborsClassifier(n_neighbors=3)),
             ('rf', RandomForestClassifier(n_estimators=300, random_state=42, n_jobs=-1)),
             ('bayes', GaussianNB()),
@@ -153,6 +123,7 @@ try:
         n_jobs=-1
     )
     
+    print("\n  Training in progress... (this may take 2-3 minutes)")
     voting_clf.fit(X_train, y_train)
     print("✓ Model training complete!")
     
@@ -161,57 +132,79 @@ try:
     print(f"✓ Model saved: Heart_Disease_Prediction_using_ECG_NEW.pkl")
     
 except Exception as e:
-    print(f"✗ Training failed: {e}")
-    print("\nTroubleshooting:")
-    print("  1. Make sure you have enough RAM (at least 4GB)")
-    print("  2. Try running with fewer samples")
-    print("  3. Check that scikit-learn is properly installed")
-    sys.exit(1)
+    print(f"❌ Training error: {e}")
+    import traceback
+    traceback.print_exc()
+    exit(1)
 
 # ============================================================================
-# STEP 5: EVALUATE MODEL
+# STEP 4: EVALUATE MODEL
 # ============================================================================
-print("\n[5/5] Evaluating model performance...")
+print("\n[4/4] Evaluating model on test set...")
 
 try:
+    # Make predictions
     y_train_pred = voting_clf.predict(X_train)
     y_test_pred = voting_clf.predict(X_test)
     
     train_accuracy = accuracy_score(y_train, y_train_pred)
     test_accuracy = accuracy_score(y_test, y_test_pred)
     
-    print(f"\n✓ Training Accuracy:  {train_accuracy:.4f} ({train_accuracy*100:.2f}%)")
-    print(f"✓ Test Accuracy:      {test_accuracy:.4f} ({test_accuracy*100:.2f}%)")
+    print(f"\n✓ Training Accuracy: {train_accuracy:.4f} ({train_accuracy*100:.2f}%)")
+    print(f"✓ Test Accuracy: {test_accuracy:.4f} ({test_accuracy*100:.2f}%)")
     
-    print("\n" + "─" * 70)
-    print("Classification Report (Test Set):")
-    print("─" * 70)
+    print("\nClassification Report (Test Set):")
+    print("-" * 70)
+    class_names = {
+        0: 'Abnormal Heartbeat (AHB)',
+        1: 'Myocardial Infarction (MI)',
+        2: 'Normal',
+        3: 'History of MI (PMI)'
+    }
+    class_names_list = [class_names[i] for i in sorted(class_names.keys())]
+    print(classification_report(y_test, y_test_pred, target_names=class_names_list))
     
-    class_names = ['Abnormal Heartbeat', 'Myocardial Infarction', 'Normal', 'History of MI']
-    print(classification_report(y_test, y_test_pred, target_names=class_names, zero_division=0))
+    print("\nConfusion Matrix (Test Set):")
+    print("-" * 70)
+    cm = confusion_matrix(y_test, y_test_pred)
+    print("     Pred: 0=AHB  1=MI  2=Normal  3=PMI")
+    for i, row in enumerate(cm):
+        print(f"True {i}: {row}")
+    
+    # Show per-class accuracy
+    print("\nPer-Class Accuracy:")
+    print("-" * 70)
+    for i in range(4):
+        mask = y_test == i
+        if np.sum(mask) > 0:
+            acc = accuracy_score(y_test[mask], y_test_pred[mask])
+            print(f"Class {i} ({class_names[i]}): {acc:.4f} ({acc*100:.2f}%)")
     
 except Exception as e:
-    print(f"⚠️ Evaluation error: {e}")
+    print(f"⚠️  Evaluation error: {e}")
 
 # ============================================================================
 # COMPLETION
 # ============================================================================
 print("\n" + "="*70)
-print("✅ RETRAINING COMPLETE!")
+print("✅ RETRAINING WITH CORRECT DATA COMPLETE!")
 print("="*70)
 
-print("\n📋 NEXT STEPS:")
-print("\n1. Backup the old (broken) model:")
+print("\nNew model created:")
+print("  • Heart_Disease_Prediction_using_ECG_NEW.pkl")
+print("\n⚠️  NOTE: PCA model already saved in this file, no need to update PCA_ECG (1).pkl")
+
+print("\nNext steps:")
+print("\n1. Backup old model:")
 print('   mv "Heart_Disease_Prediction_using_ECG (4).pkl" "Heart_Disease_Prediction_using_ECG (4).pkl.bak"')
 
-print("\n2. Use the new retrained model:")
+print("\n2. Use new model:")
 print('   mv "Heart_Disease_Prediction_using_ECG_NEW.pkl" "Heart_Disease_Prediction_using_ECG (4).pkl"')
 
 print("\n3. Restart Streamlit:")
 print("   streamlit run final_app.py")
 
-print("\n4. Test with ECG images to verify everything works")
+print("\n4. Test with your ECG images")
+print("   Predictions should now be CORRECT!")
 
-print("\n" + "="*70)
-print("Your app should now be fully functional! 🎉")
-print("="*70 + "\n")
+print("\n" + "="*70 + "\n")

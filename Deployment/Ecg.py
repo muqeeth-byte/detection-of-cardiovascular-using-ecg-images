@@ -13,12 +13,12 @@ from sklearn.preprocessing import MinMaxScaler
 import pandas as pd
 import numpy as np
 import os
-from natsort import natsorted
-from sklearn import linear_model, tree, ensemble
-from sklearn.naive_bayes import GaussianNB
-from sklearn.linear_model import LogisticRegression
 import warnings
 warnings.filterwarnings('ignore')
+
+# ============================================
+# VERSION WITHOUT NATSORT DEPENDENCY
+# ============================================
 
 class ECG:
 	def  getImage(self,image):
@@ -203,25 +203,55 @@ class ECG:
 
 	def CombineConvert1Dsignal(self):
 		"""
-		This function combines all 1D signals of 12 Leads into one FIle csv for model input.
-		returns the final dataframe
+		This function combines all 1D signals of 12 Leads into one File csv for model input.
+		returns the final dataframe - WITHOUT NATSORT
 		"""
-		#first read the Lead1 1D signal
-		test_final=pd.read_csv('Scaled_1DLead_1.csv')
-		location= os.getcwd()
-		print(location)
-		#loop over all the 11 remaining leads and combine as one dataset using pandas concat
-		for files in natsorted(os.listdir(location)):
-			if files.endswith(".csv"):
-				if files!='Scaled_1DLead_1.csv':
-					df=pd.read_csv('{}'.format(files))
-					test_final=pd.concat([test_final,df],axis=1,ignore_index=True)
-
-		return test_final
+		# Get list of CSV files (without natsort)
+		location = os.getcwd()
+		csv_files = []
 		
+		for file in os.listdir(location):
+			if file.startswith('Scaled_1DLead_') and file.endswith('.csv'):
+				csv_files.append(file)
+		
+		# Sort naturally without natsort
+		# Extract lead numbers and sort
+		csv_files_with_nums = []
+		for file in csv_files:
+			try:
+				# Extract number from filename: Scaled_1DLead_1.csv → 1
+				num = int(file.replace('Scaled_1DLead_', '').replace('.csv', ''))
+				csv_files_with_nums.append((num, file))
+			except:
+				pass
+		
+		# Sort by lead number
+		csv_files_with_nums.sort(key=lambda x: x[0])
+		csv_files = [f[1] for f in csv_files_with_nums]
+		
+		print(f"✓ Found {len(csv_files)} lead files: {csv_files}")
+		
+		# Read first file
+		if csv_files:
+			test_final = pd.read_csv(csv_files[0])
+			
+			# Combine remaining files
+			for file in csv_files[1:]:
+				try:
+					df = pd.read_csv(file)
+					test_final = pd.concat([test_final, df], axis=1, ignore_index=True)
+				except Exception as e:
+					print(f"Warning: Could not read {file}: {e}")
+			
+			return test_final
+		else:
+			print("Error: No CSV files found!")
+			return None
+
+	
 	def DimensionalReduciton(self,test_final):
 		"""
-		This function reduces the dimensinality of the 1D signal using PCA
+		This function reduces the dimensionality of the 1D signal using PCA
 		returns the final dataframe
 		"""
 		try:
@@ -245,47 +275,11 @@ class ECG:
 
 	def ModelLoad_predict(self, final_df):
 		"""
-		This Function Loads the pretrained model and perform ECG classification
-		return the classification Type.
-		
-		FIXED VERSION: Handles scikit-learn version compatibility issues
+		ULTRA-ROBUST VERSION: Handles scikit-learn version compatibility
+		Tries multiple approaches to load and predict
 		"""
-		try:
-			# FIX 1: Try to load with protocol override (handles some compatibility issues)
-			loaded_model = joblib.load('Heart_Disease_Prediction_using_ECG (4).pkl', mmap_mode=None)
-		except (ValueError, TypeError) as e:
-			print(f"Warning: Standard model loading failed with: {e}")
-			print("Attempting alternative loading method...")
-			
-			try:
-				# FIX 2: Try with different protocols
-				import pickle
-				with open('Heart_Disease_Prediction_using_ECG (4).pkl', 'rb') as f:
-					loaded_model = pickle.load(f)
-			except Exception as e2:
-				print(f"Warning: Pickle loading also failed: {e2}")
-				print("Using fallback model: Simple Ensemble Classifier")
-				
-				# FIX 3: Fallback to a simple model that doesn't have compatibility issues
-				# This will still work, but accuracy may be lower
-				loaded_model = self._create_fallback_model()
-		
-		try:
-			# Attempt prediction
-			result = loaded_model.predict(final_df)
-			diagnosis = self._map_prediction(result[0])
-			return diagnosis
-		
-		except Exception as e:
-			print(f"Error during prediction: {e}")
-			# FIX 4: If prediction fails, provide default response
-			return "⚠️ Prediction Error: Model incompatible with current scikit-learn version. Please retrain the model."
-	
-	def _map_prediction(self, prediction_value):
-		"""
-		Maps prediction output to diagnosis string
-		"""
-		prediction_value = int(prediction_value)
+		import pickle
+		import sys
 		
 		diagnosis_map = {
 			0: "Your ECG corresponds to Abnormal Heartbeat",
@@ -294,13 +288,57 @@ class ECG:
 			3: "Your ECG corresponds to History of Myocardial Infarction"
 		}
 		
-		return diagnosis_map.get(prediction_value, 
-			f"Unknown diagnosis (Class {prediction_value})")
-	
-	def _create_fallback_model(self):
-		"""
-		Creates a simple fallback classifier that uses KNN
-		This is a last resort if the trained model cannot be loaded
-		"""
-		print("⚠️ Using fallback KNN classifier (5-NN)")
-		return KNeighborsClassifier(n_neighbors=5)
+		model_file = 'Heart_Disease_Prediction_using_ECG (4).pkl'
+		
+		# ========== ATTEMPT 1: Try standard joblib loading ==========
+		try:
+			print("[Attempt 1] Loading model with joblib...")
+			loaded_model = joblib.load(model_file)
+			print("✓ Model loaded successfully with joblib")
+			result = loaded_model.predict(final_df)
+			return diagnosis_map.get(int(result[0]), f"Unknown diagnosis (Class {result[0]})")
+		except (ValueError, TypeError) as e:
+			print(f"✗ joblib loading failed: {str(e)[:100]}")
+		except Exception as e:
+			print(f"✗ joblib loading error: {str(e)[:100]}")
+		
+		# ========== ATTEMPT 2: Try pickle.load instead ==========
+		try:
+			print("[Attempt 2] Loading model with pickle.load...")
+			with open(model_file, 'rb') as f:
+				loaded_model = pickle.load(f)
+			print("✓ Model loaded successfully with pickle")
+			result = loaded_model.predict(final_df)
+			return diagnosis_map.get(int(result[0]), f"Unknown diagnosis (Class {result[0]})")
+		except (ValueError, TypeError) as e:
+			print(f"✗ pickle loading failed: {str(e)[:100]}")
+		except Exception as e:
+			print(f"✗ pickle loading error: {str(e)[:100]}")
+		
+		# ========== ATTEMPT 3: Try rebuilding the model structure ==========
+		try:
+			print("[Attempt 3] Attempting to fix model compatibility...")
+			import warnings
+			warnings.filterwarnings('ignore')
+			
+			# Load with unsafe mode (handles some compatibility issues)
+			with open(model_file, 'rb') as f:
+				import importlib
+				# Try to load with compatibility fixes
+				loaded_model = pickle.load(f, fix_imports=True, encoding='latin1')
+			
+			print("✓ Model loaded with compatibility fixes")
+			result = loaded_model.predict(final_df)
+			return diagnosis_map.get(int(result[0]), f"Unknown diagnosis (Class {result[0]})")
+		except Exception as e:
+			print(f"✗ Compatibility fix failed: {str(e)[:100]}")
+		
+		# ========== ATTEMPT 4: Return helpful error message ==========
+		print("\n" + "="*70)
+		print("CRITICAL ERROR: Cannot load pre-trained model")
+		print("="*70)
+		print("\nSolution: Run the retraining script")
+		print("Command: python retrain_model_standalone.py")
+		print("="*70 + "\n")
+		
+		return "❌ CRITICAL: Model Loading Failed. Run: python retrain_model_standalone.py"
